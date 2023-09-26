@@ -1,0 +1,11 @@
+v 1.0
+d fedistr. Plot distributions after absorbing fixed effects
+d
+d Leo Ahrens, University of Konstanz
+d
+d Requires Stata 15 and the following packages: reghdfe, ftools, palettes, colrspace, blindschemes
+d
+d Distribution-Date: 20230926
+d Support: leo@ahrensmail.de
+f fedistr.ado 
+f fedistr.sthlp
