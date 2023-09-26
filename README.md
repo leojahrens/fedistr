@@ -4,7 +4,7 @@ This is a Stata package that plots distributions of variables after absorbing th
 
 The package can be installed by executing in Stata:
 ```
-net install scatterfit, from("https://raw.githubusercontent.com/leojahrens/fedistr/master") replace
+net install fedistr, from("https://raw.githubusercontent.com/leojahrens/fedistr/master") replace
 ```
 
 Once installed, please see `help fedistr` for the syntax and the whole range of options.
