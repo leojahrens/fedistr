@@ -27,7 +27,7 @@ varlist {ifin}
 {syntab:Plotted distribution(s)}
 {synopt :{opt com:pare}}Additionally plots the original distributions before absorbing FEs/covariates.{p_end}
 {synopt :{opt hist:ogram}}Plots histograms (the default).{p_end}
-{synopt :{opt density}}Plots kernel densities.{p_end}
+{synopt :{opt dens:ity}}Plots kernel densities.{p_end}
 {synopt :{opt bins(num)}}Specifies the number of bins of histograms.{p_end}
 {synopt :{opt width(num)}}Specifies the width of histogram bars.{p_end}
 {synopt :{opt bwidth(num)}}Specifies the bandwidth of density functions.{p_end}
@@ -40,10 +40,12 @@ varlist {ifin}
 {synopt :{opt stand:ardize}}Brings all variables on a scale with a mean of zero and a standard deviation of one (applied before residualization).{p_end}
 {synopt :{opt log}}Uses the natural logarithms of all variables (applied before residualization).{p_end}
 {synopt :{opt logv:var(varlist)}}Only uses logged values of specified variables.{p_end}
-{synopt :{opt meanc:enter}}Adds back the means to all variables after residualization.{p_end}
+{synopt :{opt mean:center}}Adds back the means to all variables after residualization.{p_end}
 
 {syntab:Sample manipulation}
 {synopt :{opt commons:ample}}Ensures a common sample across all plots by dropping all observations with missings on any of the specified variables.{p_end}
+{synopt :{opt drops:ingle}}Drop singleton observations, i.e. observations with n=1 within the specified fixed effects and/or {it:by}.{p_end}
+{synopt :{opt dropz:erovar}}Drop observations that do not vary within the specified fixed effects and/or {it:by}.{p_end}
 
 {syntab:Scheme and colors}
 {synopt :{opt plots:cheme(str)}}Defines an alternative graph scheme, such as {opt plotscheme(white_tableau)}. See the collection in https://github.com/asjadnaqvi/stata-schemepack.{p_end}
@@ -56,10 +58,11 @@ varlist {ifin}
 {synopt :{opt legs:ize(num)}}Resizes the legend.{p_end}
 
 {syntab:Other}
+{synopt :{opt keep:vars}}Retain the residualized variables and dummies identifying their samples in the dataset.{p_end}
 {synopt :{opt noleg:end}}Omits the legend when the original distributions are included via {opt compare}.{p_end}
 {synopt :{opt legp:os(num)}}Position of the legend (enter values 1-12, akin to the positions of clock hands).{p_end}
 {synopt :{opt opts(str)}}Passes on options to the twoway plot(s). For example, {opt opts(xtitle("Example"))} changes the x axis title. See {opt help twoway}.{p_end}
-{synopt :{opt opts(str)}}Passes on options to graph combine, which is used internally to combine twoway plots when more than one distribution is plotted. See {opt help graph combine}.{p_end}
+{synopt :{opt grcopts(str)}}Passes on options to graph combine, which is used internally to combine twoway plots when more than one distribution is plotted. See {opt help graph combine}.{p_end}
 
 {hline}
 

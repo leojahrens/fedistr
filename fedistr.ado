@@ -1,4 +1,4 @@
-*! version 1.0   Leo Ahrens   leo@ahrensmail.de
+*! version 1.1   Leo Ahrens   leo@ahrensmail.de
 
 program define fedistr 
 version 15.0
@@ -14,11 +14,13 @@ syntax varlist(numeric min=1 max=9)	[if] [in] [aweight fweight] , [
 Controls(varlist numeric fv) fe(varlist) by(varlist min=1 max=1)
 HISTogram DENSity bins(passthru) width(passthru) bwidth(passthru) COMpare
 Percentiles(numlist) nosd Nobs
-STANDardize log LOGVar(varlist numeric) MEANCenter COMMONSample
+STANDardize log LOGVar(varlist numeric) MEANcenter 
+COMMONSample DROPSingle DROPZerovar
 COLorscheme(string) PLOTScheme(string) CINTensity(numlist max=1) 
 scale(string) XYSize(string)
 NOLEGend LEGPos(numlist) LEGSize(numlist) NONote
 opts(string asis) grcopts(string asis)
+KEEPvars
 
 ] ;
 
@@ -33,21 +35,21 @@ opts(string asis) grcopts(string asis)
 if wordcount("`varlist'")>9 {
 	di as error "The command only supports up to nine variables in {it:varlist}."
 }
-if "`fe'`controls'"=="" & "`compare'"!="" {
-	di as error "The {it:compare} option requires either {it:fe()} or {it:controls()}."
+if "`fe'`controls'`by'"=="" & "`compare'"!="" {
+	di as error "The {it:compare} option requires either {it:fe()}, {it:controls()}, or {it:by()}."
 	exit 498
 }
 
 // by 
 if "`by'"!="" {
-	if wordcount("`varlist'")>1 {
-		di as error "The by() option only works when a single variable is specified in {it:varlist}."
-		exit 498
-	}
 	qui duplicates report `by'
 	local byvalcount = r(unique_value)
-	if `byvalcount'>9 {
-		di as error "The command only supports up to nine distinct levels of the by-variable."
+	if `byvalcount'>7 {
+		di as error "The command only supports up to seven distinct levels of the by-variable."
+		exit 498
+	}
+	if "`p'"!="" {
+		di as error "The by() option cannot be combined with p()."
 		exit 498
 	}
 }
@@ -88,11 +90,14 @@ if _rc!=0 {
 * prep dataset
 *-------------------------------------------------------------------------------
 
-// preserve original data
-preserve
-
 // suppress output
 quietly {
+
+// identify observations for later merge
+if "`keepvars'"!=""	gen fedistr_n = _n
+	
+// preserve original data
+preserve
 
 // weight local
 if ("`weight'"!="") local w [`weight'`exp']
@@ -100,11 +105,13 @@ if ("`weight'"!="") local weightname = subinstr("`exp'","=","",.)
 
 // make variables numeric if required
 if "`fe'`by'"!="" {
+	local numcount = 1
 	foreach x of varlist `fe' `by' {
 		capture confirm numeric variable `x'
 		if _rc {
-			rename `x' `x'alt
-			egen `x' = group(`x'alt)
+			rename `x' fedistr_old`numcount'
+			egen `x' = group(fedistr_old`numcount')
+			local ++numcount
 		}
 	}
 }
@@ -130,7 +137,20 @@ if "`fe'"!="" local vlist `vlist' `fe'
 if "`controls'"!="" local vlist `vlist' `controls'
 if "`weight'"!="" local vlist `vlist' `weightname'
 if "`by'"!="" local vlist `vlist' `by'
+if "`keepvars'"!="" local vlist `vlist' fedistr_n
 keep `varlist' `vlist'
+
+// possibly drop obs again while retaining vars
+if "`fe'`by'"!="" {
+	local numcount = 1
+	foreach var of varlist `varlist' {
+		egen fedistr_wsd`numcount' = sd(`var'), by(`fe' `by')
+		if "`dropzerovar'"!="" drop if fedistr_wsd`numcount'==0
+		egen fedistr_c`numcount' = count(`var'), by(`fe' `by')
+		if "`dropsingle'"!="" drop if fedistr_c`numcount'==1
+		local ++numcount
+	}
+}
 
 
 *-------------------------------------------------------------------------------
@@ -142,33 +162,35 @@ local isthereby = 0
 if "`by'"!="" {
 	duplicates report `by'
 	local byvalcount = r(unique_value)
-	if `byvalcount'!=1 {
-		
-		* adapt locals
-		local isthereby = 1
-		local byparen by(`by')
-		
-		* separate versions of main variables for by-levels
-		levelsof `by', local(bynum)
-		foreach lvl in `bynum' {
-			gen `varlist'`lvl' = `varlist' if `by'==`lvl'
-			local byvarlist `byvarlist' `varlist'`lvl'
-		}
-	}
+	if `byvalcount'!=1 local isthereby = 1
+}
+if `isthereby'==0 {
+	gen fedistr_by = 1
+	local by fedistr_by
+}
+levelsof `by', local(bylvls)
+foreach lvl of numlist `bylvls' {
+	local lastby `lvl'
 }
 
 // main variables
-if `isthereby'==0 {
-	local varcount = wordcount("`varlist'")
-	tokenize `varlist'
-}
-else {
-	local varcount = `byvalcount'
-	tokenize `byvarlist'
-	local count = 1
-	foreach n of numlist `bynum' {
-		local bycode`count' = `n'
-		local ++count
+local varcount = wordcount("`varlist'")
+tokenize `varlist'
+
+
+*-------------------------------------------------------------------------------
+* check for singletons and no within-variance
+*-------------------------------------------------------------------------------
+
+if "`fe'"!="" | `isthereby'==1 {
+	if "`fe'"!="" & `isthereby'==0 local within within `fe'
+	if "`fe'"!="" & `isthereby'==1 local within within `fe' `by'
+	if "`fe'"=="" & `isthereby'==1 local within within `by'
+	foreach var of numlist 1/`varcount' {
+		count if fedistr_wsd`var'==0 & !mi(``var'')
+		if r(N)>0 di as error r(N) " observations of ``var'' do not vary `within'. Consider dropping them from FE regressions."
+		count if fedistr_c`var'==1 & !mi(``var'')
+		if r(N)>0 di as error "There are " r(N) " singleton observations of ``var'' `within'. Consider dropping them from FE regressions."
 	}
 }
 
@@ -178,14 +200,14 @@ else {
 *-------------------------------------------------------------------------------
 
 // variable transformations 
-if "`log'"!="" | ("`by'"!="" & "`logvar'"!="") {
+if "`log'"!="" {
 	foreach var of numlist 1/`varcount' {
 		count if ``var''<=0 
 		if r(N)>0 dis as error "``var'' has values <=0, which cannot be log-transformed. The values are set to missing."
 		replace ``var'' = ln(``var'')
 	}
 }
-if "`logvar'"!="" & !("`by'"!="" & "`logvar'"!="") {
+if "`logvar'"!="" & "`log'"=="" {
 	foreach x of varlist `logvar' {
 		count if `x'<=0 
 		if r(N)>0 dis as error "`x' has values <=0, which cannot be log-transformed. The values are set to missing."
@@ -193,25 +215,19 @@ if "`logvar'"!="" & !("`by'"!="" & "`logvar'"!="") {
 	}
 }
 if "`standardize'"!="" {
-	if `isthereby'==1 {
-		sum `varlist' `w'
-		local sd_bycase = r(sd)
-	}
 	foreach var of numlist 1/`varcount' {
 		sum ``var'' `w'
-		if `isthereby'==0 replace ``var'' = (``var''-r(mean))/r(sd)
-		if `isthereby'==1 replace ``var'' = (``var''-r(mean))/`sd_bycase'
+		replace ``var'' = (``var''-r(mean))/r(sd)
 	}
 }
 
-if "`fe'`controls'"!="" {
-
 // residualize
+if "`fe'`controls'"!="" | `isthereby'==1 {
 	if "`fe'"=="" local hdfeabsorb noabsorb
-	if "`fe'"!="" local hdfeabsorb absorb(`fe')
+	if "`fe'"!="" | `isthereby'==1 local hdfeabsorb absorb(`fe' `by')
 	foreach var of numlist 1/`varcount' {
-		reghdfe ``var'' `controls' `w', `hdfeabsorb' res(``var''_res)
-		gen ``var''_smple = e(sample)
+		reghdfe ``var'' `controls' `w', `hdfeabsorb' res(fedistr_res`var')
+		gen fedistr_smple`var' = e(sample)
 	}
 
 // rescale original or residualized variable
@@ -226,7 +242,7 @@ if "`fe'`controls'"!="" {
 	else {
 		foreach var of numlist 1/`varcount' {
 			sum ``var'' `w', meanonly
-			replace ``var''_res = ``var''_res+r(mean)
+			replace fedistr_res`var' = fedistr_res`var'+r(mean)
 		}
 	}
 }
@@ -234,8 +250,8 @@ if "`fe'`controls'"!="" {
 // duplicate _res variable if nothing is absorbed 
 else {
 	foreach var of numlist 1/`varcount' {
-		clonevar ``var''_res = ``var''
-		gen ``var''_smple = 1 if !mi(``var'')
+		clonevar fedistr_res`var' = ``var''
+		gen fedistr_smple`var' = 1 if !mi(``var'')
 	}
 }
 
@@ -247,10 +263,15 @@ else {
 // store standard deviations
 foreach var of numlist 1/`varcount' {
 	sum ``var'' `w'
-	local ``var''_sd = r(sd)
-	sum ``var''_res if ``var''_smple==1 `w'
-	local ``var''_ressd = r(sd)
-	local ``var''_sdred = round((1-(```var''_ressd'/```var''_sd'))*100)
+	local sd_var`var' = r(sd)
+	local count = 1
+	foreach lvl of numlist `bylvls' {
+		sum fedistr_res`var' if fedistr_smple`var'==1 & `by'==`lvl' `w'
+		local ressd_var`var'`count' = r(sd)
+		local sdred_var`var'`count' = round((1-(`ressd_var`var'`count''/`sd_var`var''))*100)
+		local sdlist_var`var' `sdlist_var`var'' ressd_var`var'`count'
+		local ++count
+	}
 }
 
 // store percentiles
@@ -265,30 +286,34 @@ if "`percentiles'"!="" {
 	foreach var of numlist 1/`varcount' {
 		
 		// store percentiles 
-		_pctile ``var''_res `w', p(`percentiles')
+		_pctile fedistr_res`var' `w', p(`percentiles')
 		foreach p of numlist 1/`pcount' {
-			local ``var''_p`p' = r(r`p')
-			local ``var''_pct ```var''_pct' ```var''_p`p''
-			local ``var''_pctlist ```var''_pctlist' ``var''_p`p'	// for later rounding
+			local p`p'_var`var' = r(r`p')
+			local pct_var`var' `pct_var`var'' `p`p'_var`var''
+			local pctlist_var`var' `pctlist_var`var'' p`p'_var`var'	// for later rounding
 		}
 		
 		// prep plot line options
-		local ``var''_pct xline(```var''_pct', `pctline')
+		local pct_var`var' xline(`pct_var`var'', `pctline')
 	}
 }
 
 // number of observations
 if "`nobs'"!="" {
 	foreach var of numlist 1/`varcount' {
-		count if !mi(``var'')
-		local nobs`var' = r(N)
+		local count = 1
+		foreach lvl of numlist `bylvls' {
+			count if !mi(``var'') & `by'==`lvl'
+			local nobs`var'`count' = r(N)
+			local ++count
+		}
 	}
 }
 
 // round parameters
 *local space " "
 foreach var of numlist 1/`varcount' {
-	foreach par in ``var''_sd ``var''_ressd ```var''_pctlist' {
+	foreach par in sd_var`var' `sdlist_var`var'' `pctlist_var`var'' {
 		local smallround`par' = 0
 		if ``par''>=10 | ``par''<=-10 {
 			local `par'round "1"
@@ -348,7 +373,7 @@ if "`percentiles'"!="" {
 		local count = 1
 		foreach p in `percentiles' {
 			if "`p'"!="`lastpct'" local comma`var'`count' ,
-			local ``var''pcttxt ```var''pcttxt' pct{sub:`p'}```var''_p`count''`comma`var'`count''
+			local pcttxt_var`var' `pcttxt_var`var'' pct{sub:`p'}`p`count'_var`var''`comma`var'`count''
 			local ++count
 		}
 	}
@@ -397,12 +422,12 @@ else {
 	}
 }
 if `xysize'<=1 {
-	local ysize = 100
-	local xsize = 100*`xysize'
+	local ysize = (100)/5
+	local xsize = (100*`xysize')/5
 }
 if `xysize'>1 {
-	local xsize = 100
-	local ysize = 100*(1/`xysize')
+	local xsize = (100)/5
+	local ysize = (100*(1/`xysize'))/5
 }
 
 // graph combine options
@@ -425,7 +450,8 @@ else {
 *-------------------------------------------------------------------------------
 
 if "`colorscheme'"=="" {
-	local cpal `" "210 0 0" "49 113 166" "'
+	if `isthereby'==1 local cpal `" "210 0 0" "49 113 166" "15 137 1" "255 127 14" "169 58 228" "41 217 231" "250 238 22"  "222 115 50" "'
+	if `isthereby'==0 local cpal `" "210 0 0" "49 113 166" "'
 }
 else {
 	local cpal `colorscheme'
@@ -450,7 +476,7 @@ foreach i of numlist 10 20 50 80 {
 *-------------------------------------------------------------------------------
 
 // legend
-if "`compare'"!="" {
+if "`compare'"!="" | `isthereby'==1 {
 	if "`legpos'"=="" local legpos 1
 	if "`legsize'"!="" {
 		if strpos("`legsize'","*") {
@@ -462,10 +488,22 @@ if "`compare'"!="" {
 		if `varcount'==1 local legsize 1
 		if `varcount'>1 local legsize .7
 	}
-	local legend legend(order(1 "Original" 2 "Residual") ring(0) keygap(*.5) symxsize(*.5) bcolor(none) lcolor(none) fcolor(none) bmargin(zero) pos(`legpos') size(*`legsize') nobox)
+	if `isthereby'==0 {
+		local legcont `"1 "Original" 2 "Residual""'
+	}
+	else {
+		if "`compare'"!="" local legcont `"1 "Original""'
+		local count = 1
+		if "`compare'"!="" local ++count
+		foreach lvl of numlist `bylvls' {
+			local legcont `"`legcont' `count' "`by'=`lvl'""'
+			local ++count
+		}
+	}
+	local legend legend(order(`legcont') ring(0) keygap(*.5) symxsize(*.5) bcolor(none) lcolor(none) fcolor(none) bmargin(zero) pos(`legpos') size(*`legsize') nobox)
 	if "`nolegend'"!="" local legend legend(off)
 }
-
+*	if `isthereby'==1 local title1 {bf:`varlist' (at `by'==`bycode`var'')} `log_var`var''
 // note 
 if "`nonote'"=="" {
 	if "`fe'"!="" {
@@ -495,32 +533,67 @@ if "`nonote'"=="" {
 
 // histgram / density
 if "`density'"=="" & "`histogram'"=="" local histogram histogram
-if "`compare'"=="" {	// single plot
-	if "`histogram'"!="" local look lalign(inside) lc(black) lw(thin) fc(`c1') 
-	if "`density'"!="" local look lalign(outside) recast(area) lc(black) lw(thin) fc(`c1low')
+if "`compare'"=="" & `isthereby'==0 {
+	if "`histogram'"!="" local look1 lalign(inside) lc(black) lw(thin) fc(`c1') 
+	if "`density'"!="" local look1 lalign(outside) recast(area) lc(black) lw(thin) fc(`c1low')
 }
-if "`compare'"!="" {	// with original below
-	if "`histogram'"!="" {
-		local look lalign(inside) lc(`c1o10') lw(thin) fc(`c1o80')
-		local oglook lalign(inside) lc(`c2o10') lw(thin) fc(`c2o80')
+else {
+	local count = 1
+	foreach byc of numlist `bylvls' {
+		if "`histogram'"!="" local look`count' lalign(inside) lc(`c`count'o10') lw(thin) fc(`c`count'o80')
+		if "`density'"!="" local look`count' lalign(outside) recast(area) lc(`c`count'dark') lw(thin) fc(`c`count'o50')
+		local ++count
 	}
-	if "`density'"!="" {
-		local look lalign(outside) recast(area) lc(`c1dark') lw(thin) fc(`c1o50')
-		local oglook lalign(outside) recast(area) lc(`c2dark') lw(thin) fc(`c2o50')
+	if "`compare'"!="" {
+		if "`histogram'"!="" {
+			if `isthereby'==0 local oglook lalign(inside) lc(`c2o10') lw(thin) fc(`c2o80')
+			if `isthereby'==1 local oglook lalign(inside) lc(black%10) lw(thin) fc(black%70)
+		}
+		if "`density'"!="" {
+			if `isthereby'==0 local oglook lalign(outside) recast(area) lc(`c2dark') lw(thin) fc(`c2o50')
+			if `isthereby'==1 local oglook lalign(outside) recast(area) lc(black%95) lw(thin) fc(black%50)
+		}
 	}
 }
 
 // title with variable name and parameters
 foreach var of numlist 1/`varcount' {
-	if "`log'"!="" | strpos("`logvar'","``var''") local ``var''log (log)
-	if "`fe'`controls'"!="" local sdreduc {it:(-```var''_sdred'%)}
-	if `isthereby'==0 local title1 {bf:``var''} ```var''log'
-	if `isthereby'==1 local title1 {bf:`varlist' (at `by'==`bycode`var'')} ```var''log'
-	local title2 SD{sub:original}```var''_sd', SD{sub:residual}```var''_ressd' `sdreduc'
-	local title3 ```var''_sdred'% of variance absorbed
-	if "`nobs'"!="" local title4 `" "N = `nobs`var''"  "'
-	if "`percentiles'"!="" local title5 `" "```var''pcttxt'"  "'
-	local ``var''_title title("`title1'" "`title2'" `title5' `title4')
+	* prep
+	if "`log'"!="" | strpos("`logvar'","``var''") local log_var`var' (log)
+	if "`fe'`controls'"!="" & `isthereby'==0 local sdreduc {it:(-`sdred_var`var'1'%)}
+	* top title with variable name
+	local title1_`var' {bf:``var''} `log_var`var''
+	* standard deviations
+	if `isthereby'==0 {
+		if "`fe'`controls'"!="" local restitle , SD{sub:residual}`ressd_var`var'1' `sdreduc'
+		local title2_`var' SD{sub:original}`sd_var`var''`restitle'
+	}
+	if `isthereby'==1 {
+		local title2pre_`var' `""SD{sub:original}`sd_var`var''""'
+		local count = 1
+		foreach lvl of numlist `bylvls' {
+			local comma 
+			if `lvl'!=`lastby' local comma ,
+			local title2_`var' `title2_`var'' SD{sub:`by'=`lvl'}`ressd_var`var'`count''`comma'
+			local ++count
+		}
+	}
+	* no of observations
+	if "`nobs'"!="" {
+		local count = 1
+		foreach lvl of numlist `bylvls' {
+			local comma 
+			if `lvl'!=`lastby' local comma ,
+			if `isthereby'==1 local sub {sub:`by'=`lvl'}
+			local nobslist_`var' `nobslist_`var'' N`sub'=`nobs`var'`count''`comma'
+			local ++count
+		}
+		local title4_`var' `" "`nobslist_`var''"  "'
+	}
+	* percentiles
+	if "`percentiles'"!="" local title5_`var' `" "`pcttxt_var`var''"  "'
+	* combine
+	local title_var`var' title("`title1_`var''" `title2pre_`var'' "`title2_`var''" `title5_`var'' `title4_`var'')
 }
 
 // overall twoway options
@@ -566,10 +639,14 @@ foreach var of numlist 1/`varcount' {
 	if "`compare'"!="" local plot`var' `plot`var'' (`plottype' ``var'', `oglook' `plottypeopts')
 	
 	// residualized distribution
-	local plot`var' `plot`var'' (`plottype' ``var''_res, `look' `plottypeopts')
-	
+	local count = 1
+	foreach lvl of numlist `bylvls' {
+		local plot`var' `plot`var'' (`plottype' fedistr_res`var' if `by'==`lvl', `look`count'' `plottypeopts')
+		local ++count
+	}
+		
 	// draw with graph twoway
-	tw `plot`var'', `commonopts' ```var''_pct' ```var''_title' `sav' `opts'
+	tw `plot`var'', `commonopts' `pct_var`var'' `title_var`var'' `sav' `opts'
 
 }
 
@@ -579,8 +656,37 @@ if `varcount'>1 {
 }
 
 
-restore
+*-------------------------------------------------------------------------------
+* merge back stored variables
+*-------------------------------------------------------------------------------
+
+quietly {
+
+	if "`keepvars'"!="" {
+		foreach var of numlist 1/`varcount' {
+			rename fedistr_res`var' ``var''_res
+			rename fedistr_smple`var' ``var''_smple
+			local keeplist `keeplist' ``var''_res ``var''_smple
+		}
+		keep fedistr_n `keeplist'
+		tempfile fedistr_merge
+		save `fedistr_merge', replace
+	}
+
+	restore
+
+	if "`keepvars'"!="" {
+		merge 1:1 fedistr_n using `fedistr_merge', nogen update replace
+		drop fedistr_n
+		foreach var of numlist 1/`varcount' {
+			replace ``var''_smple = 0 if mi(``var''_smple)
+		}
+	}
+}
+
+
 end
+
 
 
 
