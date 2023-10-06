@@ -1,4 +1,4 @@
-*! version 1.1   Leo Ahrens   leo@ahrensmail.de
+*! version 1.2   Leo Ahrens   leo@ahrensmail.de
 
 program define fedistr 
 version 15.0
@@ -14,22 +14,43 @@ syntax varlist(numeric min=1 max=9)	[if] [in] [aweight fweight] , [
 Controls(varlist numeric fv) fe(varlist) by(varlist min=1 max=1)
 HISTogram DENSity bins(passthru) width(passthru) bwidth(passthru) COMpare
 Percentiles(numlist) nosd Nobs
-STANDardize log LOGVar(varlist numeric) MEANcenter 
+STANDardize log LOGVar(varlist numeric) MEANcenter WINSor(numlist) WINSORRes(numlist) KEEPvars REPLace
 COMMONSample DROPSingle DROPZerovar
 COLorscheme(string) PLOTScheme(string) CINTensity(numlist max=1) 
 scale(string) XYSize(string)
-NOLEGend LEGPos(numlist) LEGSize(numlist) NONote
-opts(string asis) grcopts(string asis)
-KEEPvars
+NOPlot NOLEGend LEGPos(numlist) LEGSize(numlist) NONote 
+opts(string asis) grcopts(string asis) slow
 
 ] ;
 
 #delimit cr
 
 
+
+*-------------------------------------------------------------------------------
+* prep slow options
+*-------------------------------------------------------------------------------
+	
+if "`slow'"!="" {
+	local lvlsof levelsof
+	local sumd sum 
+	local sumd2 , d
+	local ggen egen
+	local duplrep duplicates report
+}
+else {
+	local lvlsof glevelsof
+	local sumd gstats sum
+	local ggen gegen
+	local duplrep gdistinct
+}
+
 *-------------------------------------------------------------------------------
 * check if options are correct & output errors
 *-------------------------------------------------------------------------------
+
+// suppress output
+quietly {
 
 // variable absorbtion
 if wordcount("`varlist'")>9 {
@@ -42,8 +63,11 @@ if "`fe'`controls'`by'"=="" & "`compare'"!="" {
 
 // by 
 if "`by'"!="" {
-	qui duplicates report `by'
-	local byvalcount = r(unique_value)
+	if "`if'"!="" local ifhelp &
+	if "`if'"=="" local ifhelp if
+	`duplrep' `by' `if' `ifhelp' !mi(`by')
+	if "`slow'"=="" local byvalcount = r(ndistinct)
+	if "`slow'"!="" local byvalcount = r(unique_value)
 	if `byvalcount'>7 {
 		di as error "The command only supports up to seven distinct levels of the by-variable."
 		exit 498
@@ -70,9 +94,16 @@ if "`logvar'"!="" {
 *-------------------------------------------------------------------------------
 
 // install
-foreach package in reghdfe ftools {
-	capture which `package'
-	if _rc==111 ssc install `package', replace
+if "`slow'"=="" {
+	foreach package in reghdfe ftools {
+		capture which `package'
+		if _rc==111 ssc install `package', replace
+	}
+	capture which gtools
+	if _rc==111 {
+		ssc install gtools, replace 
+		gtools, upgrade
+	}
 }
 capture which colorpalette
 if _rc==111 {
@@ -85,13 +116,9 @@ if _rc!=0 {
 	if _rc==111 ssc install blindschemes, replace
 }
 
-
 *-------------------------------------------------------------------------------
 * prep dataset
 *-------------------------------------------------------------------------------
-
-// suppress output
-quietly {
 
 // identify observations for later merge
 if "`keepvars'"!=""	gen fedistr_n = _n
@@ -110,7 +137,7 @@ if "`fe'`by'"!="" {
 		capture confirm numeric variable `x'
 		if _rc {
 			rename `x' fedistr_old`numcount'
-			egen `x' = group(fedistr_old`numcount')
+			`ggen' `x' = group(fedistr_old`numcount')
 			local ++numcount
 		}
 	}
@@ -144,9 +171,9 @@ keep `varlist' `vlist'
 if "`fe'`by'"!="" {
 	local numcount = 1
 	foreach var of varlist `varlist' {
-		egen fedistr_wsd`numcount' = sd(`var'), by(`fe' `by')
+		`ggen' fedistr_wsd`numcount' = sd(`var'), by(`fe' `by')
 		if "`dropzerovar'"!="" drop if fedistr_wsd`numcount'==0
-		egen fedistr_c`numcount' = count(`var'), by(`fe' `by')
+		`ggen' fedistr_c`numcount' = count(`var'), by(`fe' `by')
 		if "`dropsingle'"!="" drop if fedistr_c`numcount'==1
 		local ++numcount
 	}
@@ -160,15 +187,16 @@ if "`fe'`by'"!="" {
 // by variable
 local isthereby = 0
 if "`by'"!="" {
-	duplicates report `by'
-	local byvalcount = r(unique_value)
+	`duplrep' `by'
+	if "`slow'"=="" local byvalcount = r(ndistinct)
+	if "`slow'"!="" local byvalcount = r(unique_value)
 	if `byvalcount'!=1 local isthereby = 1
 }
 if `isthereby'==0 {
 	gen fedistr_by = 1
 	local by fedistr_by
 }
-levelsof `by', local(bylvls)
+`lvlsof' `by', local(bylvls)
 foreach lvl of numlist `bylvls' {
 	local lastby `lvl'
 }
@@ -176,7 +204,6 @@ foreach lvl of numlist `bylvls' {
 // main variables
 local varcount = wordcount("`varlist'")
 tokenize `varlist'
-
 
 *-------------------------------------------------------------------------------
 * check for singletons and no within-variance
@@ -194,12 +221,21 @@ if "`fe'"!="" | `isthereby'==1 {
 	}
 }
 
-
 *-------------------------------------------------------------------------------
 * residualization & scaling
 *-------------------------------------------------------------------------------
 
 // variable transformations 
+if "`winsor'"!="" {
+	foreach var of numlist 1/`varcount' {
+		foreach pctl of numlist `winsor' {
+			if "`slow'"=="" gquantiles ``var'' `w', _pctile percentiles(`pctl')
+			if "`slow'"!="" _pctile ``var'' `w', p(`pctl')
+			if `pctl'>=50 replace ``var'' = r(r1) if ``var''>r(r1) & !mi(``var'')
+			if `pctl'<50 replace ``var'' = r(r1) if ``var''<r(r1) & !mi(``var'')
+		}
+	}
+}
 if "`log'"!="" {
 	foreach var of numlist 1/`varcount' {
 		count if ``var''<=0 
@@ -216,18 +252,41 @@ if "`logvar'"!="" & "`log'"=="" {
 }
 if "`standardize'"!="" {
 	foreach var of numlist 1/`varcount' {
-		sum ``var'' `w'
-		replace ``var'' = (``var''-r(mean))/r(sd)
+		if "`slow'"!="" {
+			sum ``var'' `w'
+			replace ``var'' = (``var''-r(mean))/r(sd)
+		}
+		if "`slow'"=="" gstats transform (standardize) ``var'' `w', replace
 	}
 }
 
 // residualize
 if "`fe'`controls'"!="" | `isthereby'==1 {
-	if "`fe'"=="" local hdfeabsorb noabsorb
-	if "`fe'"!="" | `isthereby'==1 local hdfeabsorb absorb(`fe' `by')
-	foreach var of numlist 1/`varcount' {
-		reghdfe ``var'' `controls' `w', `hdfeabsorb' res(fedistr_res`var')
-		gen fedistr_smple`var' = e(sample)
+	if "`slow'"!="" {
+		foreach fevar in `fe' {
+			local fevarlist `fevarlist' i.`fevar'
+		}
+		foreach var of numlist 1/`varcount' {
+			reg ``var'' `fevarlist' `controls' `w'
+			predict fedistr_res`var', resid
+			gen fedistr_smple`var' = e(sample)
+		}
+	}
+	else if "`controls'"=="" & `isthereby'==0 {
+		global GTOOLS_BETA = "I KNOW WHAT I AM DOING"
+		if `isthereby'==1 local gtoolsby by(`by')
+		foreach var of numlist 1/`varcount' {
+			gstats residualize ``var'' `w', absorb(`fe') `gtoolsby' gen(fedistr_res`var')
+			gen fedistr_smple`var' = !mi(fedistr_res`var')
+		}		
+	}
+	else {
+		if "`fe'"=="" local hdfeabsorb noabsorb
+		if "`fe'"!="" | `isthereby'==1 local hdfeabsorb absorb(`fe' `by')
+		foreach var of numlist 1/`varcount' {
+			reghdfe ``var'' `controls' `w', `hdfeabsorb' res(fedistr_res`var')
+			gen fedistr_smple`var' = e(sample)
+		}
 	}
 
 // rescale original or residualized variable
@@ -247,8 +306,20 @@ if "`fe'`controls'"!="" | `isthereby'==1 {
 	}
 }
 
+// winsor residualized
+if "`winsorres'"!="" {
+	foreach var of numlist 1/`varcount' {
+		foreach pctl of numlist `winsorres' {
+			if "`slow'"=="" gquantiles fedistr_res`var' `w', _pctile percentiles(`pctl')
+			if "`slow'"!="" _pctile fedistr_res`var' `w', p(`pctl')
+			if `pctl'>=50 replace fedistr_res`var' = r(r1) if fedistr_res`var'>r(r1) & !mi(fedistr_res`var')
+			if `pctl'<50 replace fedistr_res`var' = r(r1) if fedistr_res`var'<r(r1) & !mi(fedistr_res`var')
+		}
+	}
+}
+
 // duplicate _res variable if nothing is absorbed 
-else {
+if !("`fe'`controls'"!="" | `isthereby'==1) {
 	foreach var of numlist 1/`varcount' {
 		clonevar fedistr_res`var' = ``var''
 		gen fedistr_smple`var' = 1 if !mi(``var'')
@@ -260,6 +331,8 @@ else {
 * gather parameters
 *-------------------------------------------------------------------------------
 
+if "`noplot'"=="" {
+	
 // store standard deviations
 foreach var of numlist 1/`varcount' {
 	sum ``var'' `w'
@@ -286,7 +359,8 @@ if "`percentiles'"!="" {
 	foreach var of numlist 1/`varcount' {
 		
 		// store percentiles 
-		_pctile fedistr_res`var' `w', p(`percentiles')
+		if "`slow'"=="" gquantiles fedistr_res`var' `w', _pctile percentiles(`percentiles')
+		if "`slow'"!="" _pctile fedistr_res`var' `w', p(`percentiles')
 		foreach p of numlist 1/`pcount' {
 			local p`p'_var`var' = r(r`p')
 			local pct_var`var' `pct_var`var'' `p`p'_var`var''
@@ -611,9 +685,12 @@ else {
 local grcopts `grcombopts' imargin(small) note(`grcnote', `notesize')
 
 
+
 *-------------------------------------------------------------------------------
 * plot
 *-------------------------------------------------------------------------------
+
+
 
 // decide which plot to draw
 if "`histogram'"!="" {
@@ -624,7 +701,9 @@ if "`density'"!="" {
 	local plottype kdensity
 	local plottypeopts `bwidth'
 }
+} 	// closes plotfig brackket
 }	// closes quietly bracket
+if "`noplot'"=="" {
 
 // draw plot 
 foreach var of numlist 1/`varcount' {
@@ -651,10 +730,9 @@ foreach var of numlist 1/`varcount' {
 }
 
 // combine multiple plots 
-if `varcount'>1 {
-	graph combine `compiler', `grcombsize' `grcopts'
-}
+if `varcount'>1 graph combine `compiler', `grcombsize' `grcopts'
 
+}
 
 *-------------------------------------------------------------------------------
 * merge back stored variables
@@ -664,9 +742,15 @@ quietly {
 
 	if "`keepvars'"!="" {
 		foreach var of numlist 1/`varcount' {
-			rename fedistr_res`var' ``var''_res
-			rename fedistr_smple`var' ``var''_smple
-			local keeplist `keeplist' ``var''_res ``var''_smple
+			if "`replace'"=="" {
+				rename fedistr_res`var' ``var''_res
+				local keeplist `keeplist' ``var''_res
+			}
+			if "`replace'"!="" {
+				cap drop ``var''
+				rename fedistr_res`var' ``var''
+				local keeplist `keeplist' ``var''
+			}
 		}
 		keep fedistr_n `keeplist'
 		tempfile fedistr_merge
@@ -676,11 +760,9 @@ quietly {
 	restore
 
 	if "`keepvars'"!="" {
+		if "`replace'"!="" drop `keeplist'
 		merge 1:1 fedistr_n using `fedistr_merge', nogen update replace
 		drop fedistr_n
-		foreach var of numlist 1/`varcount' {
-			replace ``var''_smple = 0 if mi(``var''_smple)
-		}
 	}
 }
 
