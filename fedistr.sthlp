@@ -69,6 +69,7 @@ varlist {ifin}
 {synopt :{opt legp:os(num)}}Position of the legend (enter values 1-12, akin to the positions of clock hands).{p_end}
 {synopt :{opt opts(str)}}Passes on options to the twoway plot(s). For example, {opt opts(xtitle("Example"))} changes the x axis title. See {opt help twoway}.{p_end}
 {synopt :{opt grcopts(str)}}Passes on options to graph combine, which is used internally to combine twoway plots when more than one distribution is plotted. See {opt help graph combine}.{p_end}
+{synopt :{opt slow}}Use native Stata commands instead of Gtools, reghdfe, and ftools.{p_end}
 
 {hline}
 
